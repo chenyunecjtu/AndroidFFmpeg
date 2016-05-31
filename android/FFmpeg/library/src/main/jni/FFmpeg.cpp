@@ -1,27 +1,93 @@
-#include "ffmpeg.h"
+//
+// Created by wlanjie on 16/5/30.
+//
 
-InputFile *input_file = NULL;
-InputStream **input_streams = NULL;
-int nb_input_streams = 0;
-OutputFile *output_file = NULL;
-OutputStream **output_streams = NULL;
-int nb_output_streams = 0;
+#include "FFmpeg.h"
+#include "Utils.h"
 
-void *grow_array(void *array, int elem_size, int *size, int new_size) {
-    if (new_size > INT_MAX / elem_size) {
-        av_log(NULL, AV_LOG_ERROR, "Array to big.\n");
-        return NULL;
-    }
-    if (*size < new_size) {
-        uint8_t *tmp = av_realloc_array(array, (size_t) elem_size, (size_t) new_size);
-        memset(tmp + *size * elem_size, 0, (size_t) ((new_size - *size) * elem_size));
-        *size = new_size;
-        return tmp;
-    }
-    return array;
+FFmpeg::FFmpeg() {
 }
 
-double get_rotation(AVStream *st) {
+FFmpeg::~FFmpeg() {
+
+}
+
+FFmpeg* FFmpeg::getInstance() {
+    if (instance == NULL) {
+        instance = new FFmpeg();
+    }
+    return instance;
+}
+
+vector<InputStream> FFmpeg::getInputStreams() {
+    return inputStreams;
+}
+
+vector<OutputStream> FFmpeg::getOutputStreams() {
+    return outputStreams;
+}
+
+void FFmpeg::addInputStream(InputStream *inputStream) {
+    inputStreams.push_back(*inputStream);
+}
+
+void FFmpeg::releaseInputStreams() {
+    inputStreams.clear();
+    inputStreams.swap(inputStreams);
+}
+
+void FFmpeg::removeInputStream(InputStream *inputStream) {
+    vector<InputStream>::iterator  iter;
+    for (iter = inputStreams.begin(); iter != inputStreams.end();) {
+        if (iter == inputStream) {
+            inputStreams.erase(iter);
+            break;
+        }
+        iter++;
+    }
+}
+
+void FFmpeg::addOutputStream(OutputStream *outputStream) {
+    outputStreams.push_back(*outputStream);
+}
+
+void FFmpeg::releaseOutputStreams() {
+    outputStreams.clear();
+    outputStreams.swap(outputStreams);
+}
+
+void FFmpeg::removeOutputStream(OutputStream *outputStream) {
+    vector<OutputStream>::iterator  iter;
+    for (iter = outputStreams.begin(); iter != outputStreams.end();) {
+        if (iter == outputStream) {
+            outputStreams.erase(iter);
+            break;
+        }
+        iter++;
+    }
+}
+
+void FFmpeg::setInputFile(InputFile *inputFile) {
+    if (this->inputFile != inputFile) {
+        this->inputFile = inputFile;
+    }
+}
+
+void FFmpeg::setOutputFile(OutputFile *outputFile) {
+    if (this->outputFile != outputFile) {
+        this->outputFile = outputFile;
+    }
+}
+
+InputFile* FFmpeg::getInputFile() {
+    return inputFile;
+}
+
+OutputFile* FFmpeg::getOutputFile() {
+    return outputFile;
+}
+
+double FFmpeg::getRotation(AVStream *st) {
     AVDictionaryEntry *rotate = av_dict_get(st->metadata, "rotate", NULL, 0);
     uint8_t *displaymatrix = av_stream_get_side_data(st, AV_PKT_DATA_DISPLAYMATRIX, NULL);
     double theta = 0;
@@ -45,7 +111,12 @@ double get_rotation(AVStream *st) {
     return theta;
 }
 
-AVPacket init_packet() {
+void* FFmpeg::grow_array(void *array, int elem_size, int *size, int new_size) {
+
+}
+
+
+AVPacket FFmpeg::init_packet() {
     AVPacket packet;
     av_init_packet(&packet);
     packet.size = 0;
@@ -53,10 +124,11 @@ AVPacket init_packet() {
     return packet;
 }
 
-int encoder_write_frame(AVFrame *frame, int stream_index, int *got_frame) {
+int FFmpeg::encoder_write_frame(AVFrame *frame, int stream_index, int *got_frame) {
     int ret = 0;
     AVPacket packet = init_packet();
-    const OutputStream *ost = output_streams[stream_index];
+//    const OutputStream *ost = output_streams[stream_index];
+    OutputStream *ost = &outputStreams.at(static_cast<unsigned int> (stream_index));
     int (*enc_func) (AVCodecContext *, AVPacket *, const AVFrame *, int *) =
             ost->st->codec->codec_type == AVMEDIA_TYPE_VIDEO ? avcodec_encode_video2 : avcodec_encode_audio2;
     int got_frame_local;
@@ -74,7 +146,7 @@ int encoder_write_frame(AVFrame *frame, int stream_index, int *got_frame) {
     }
     packet.stream_index = stream_index;
     av_packet_rescale_ts(&packet, ost->st->codec->time_base, ost->st->time_base);
-    ret = av_interleaved_write_frame(output_file->oc, &packet);
+    ret = av_interleaved_write_frame(outputFile->oc, &packet);
     if (ret < 0) {
         av_packet_unref(&packet);
         return ret;
@@ -83,9 +155,10 @@ int encoder_write_frame(AVFrame *frame, int stream_index, int *got_frame) {
     return ret;
 }
 
-int flush_encoder(int stream_index) {
+int FFmpeg::flush_encoder(int stream_index) {
     int ret = 0;
-    const OutputStream *ost = output_streams[stream_index];
+//    const OutputStream *ost = output_streams[stream_index];
+    OutputStream *ost = &outputStreams.at(static_cast<unsigned int> (stream_index));
     if (!(ost->enc_ctx->codec->capabilities & AV_CODEC_CAP_DELAY)) {
         return 0;
     }
@@ -102,9 +175,10 @@ int flush_encoder(int stream_index) {
     return ret;
 }
 
-int filter_encoder_write_frame(int stream_index) {
+int FFmpeg::filter_encoder_write_frame(int stream_index) {
     int ret = 0;
-    const OutputStream *ost = output_streams[stream_index];
+//    const OutputStream *ost = output_streams[stream_index];
+    OutputStream *ost = &outputStreams.at(static_cast<unsigned int> (stream_index));
     while (1) {
         AVFrame *frame = av_frame_alloc();
         if (!frame) {
@@ -129,14 +203,16 @@ int filter_encoder_write_frame(int stream_index) {
     return ret;
 }
 
-int transcode() {
+
+int FFmpeg::transcode() {
     int ret = 0;
     int (*dec_func) (AVCodecContext *, AVFrame *, int *, const AVPacket *);
     AVPacket packet;
     int got_frame;
-    while (av_read_frame(input_file->ic, &packet) >= 0) {
+    while (av_read_frame(inputFile->ic, &packet) >= 0) {
         AVFrame *frame = av_frame_alloc();
-        InputStream *ist = input_streams[packet.stream_index];
+//        InputStream *ist = input_streams[packet.stream_index];
+        InputStream *ist = &inputStreams.at(static_cast<unsigned int> (packet.stream_index));
         if (!frame) {
             return AVERROR(ENOMEM);
         }
@@ -162,7 +238,7 @@ int transcode() {
         av_packet_unref(&packet);
         av_frame_unref(frame);
     }
-    for (int i = 0; i < input_file->ic->nb_streams; ++i) {
+    for (int i = 0; i < inputFile->ic->nb_streams; ++i) {
         ret = filter_encoder_write_frame(i);
         if (ret < 0) {
             return ret;
@@ -172,6 +248,6 @@ int transcode() {
             return ret;
         }
     }
-    av_write_trailer(output_file->oc);
+    av_write_trailer(outputFile->oc);
     return ret;
 }

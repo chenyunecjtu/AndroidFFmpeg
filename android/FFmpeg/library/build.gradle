@@ -40,7 +40,8 @@ model {
         moduleName = "wlanjie"
         toolchain = "clang"
         toolchainVersion = "3.6"
-        stl = "stlport_static"
+//        stl = "stlport_static"
+        stl = "stlport_shared"
         CFlags.add("-Wall")
         CFlags.add("-I${file("src/main/jni")}".toString())
         CFlags.add("-I${file("src/main/jni/ijkj4a")}".toString())
@@ -62,9 +63,14 @@ model {
         CFlags.add("-I${file(ffmpeg_path_armeabi_v7a)}".toString())
         CFlags.add("-I${file(ffmpeg_path_x86)}".toString())
 
+        cppFlags.add("-std=c++11")
+        cppFlags.add("-fexceptions")
         cppFlags.add("-I${file("src/main/jni/libyuv")}".toString())
         cppFlags.add("-I${file("src/main/jni/libyuv/include")}".toString())
         cppFlags.add("-I${file("src/main/jni/libyuv/include/libyuv")}".toString())
+        cppFlags.add("-I${file(ffmpeg_path_armeabi)}".toString())
+        cppFlags.add("-I${file(ffmpeg_path_armeabi_v7a)}".toString())
+        cppFlags.add("-I${file(ffmpeg_path_x86)}".toString())
 
         ldFlags.add("-L${file("src/main/jniLibs/armeabi")}".toString())
         ldFlags.add("-L${file("src/main/jniLibs/armeabi-v7a")}".toString())

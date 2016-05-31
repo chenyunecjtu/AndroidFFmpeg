@@ -1,14 +1,30 @@
 //
-// Created by wlanjie on 16/5/3.
+// Created by wlanjie on 16/5/30.
 //
-#include "openfile.h"
 
-int open_input_file(const char *input_data_source) {
+#include "OpenFiles.h"
+
+OpenFiles::OpenFiles() {
+
+}
+
+OpenFiles::~OpenFiles() {
+
+}
+
+OpenFiles* OpenFiles::getInstance() {
+    if (instance == NULL) {
+        instance = new OpenFiles();
+    }
+    return instance;
+}
+
+int OpenFiles::openInputFile(InputFile *inputFile) {
     int ret = 0;
+    FFmpeg::getInstance()->;
     AVFormatContext *ic = NULL;
-    ret = avformat_open_input(&ic, input_data_source, NULL, NULL);
+    ret = avformat_open_input(&ic, inputFile->inputDataSource, NULL, NULL);
     if (ret < 0) {
-        LOGE("open input file error %s file path %s", av_err2str(ret), input_data_source);
         av_err2str(ret);
         return ret;
     }
@@ -19,8 +35,7 @@ int open_input_file(const char *input_data_source) {
     }
     for (int i = 0; i < ic->nb_streams; ++i) {
         AVStream *st = ic->streams[i];
-        GROW_ARRAY(input_streams, nb_input_streams);
-        InputStream *ist = av_mallocz(sizeof(*ist));
+        InputStream *ist = dynamic_cast<InputStream *> (av_mallocz(sizeof(*ist)));
         ist->st = st;
         ist->dec = avcodec_find_decoder(st->codec->codec_id);
         ist->dec->capabilities |= CODEC_CAP_DELAY;
@@ -28,18 +43,19 @@ int open_input_file(const char *input_data_source) {
         ist->dec_ctx->active_thread_type |= FF_THREAD_FRAME;
         ret = avcodec_copy_context(ist->dec_ctx, st->codec);
         if (ret < 0) {
+            av_freep(&ist);
             av_err2str(ret);
             return ret;
         }
-        input_streams[nb_input_streams - 1] = ist;
+        FFmpeg::getInstance()->addInputStream(ist);
     }
-    input_file = av_mallocz(sizeof(*input_file));
-    input_file->ic = ic;
-    av_dump_format(ic, 0, input_data_source, 0);
+    inputFile->ic = ic;
+    av_dump_format(ic, 0, inputFile->inputDataSource, 0);
     return ret;
 }
 
-int get_buffer(AVCodecContext *s, AVFrame *frame, int flags) {
+
+int OpenFiles::get_buffer(AVCodecContext *s, AVFrame *frame, int flags) {
     return avcodec_default_get_buffer2(s, frame, flags);
 }
 
@@ -52,22 +68,22 @@ void free_filter_graph(FilterGraph **graph, int graph_count) {
     }
 }
 
-int init_output() {
+int OpenFiles::init_output() {
     int ret = 0;
     FilterGraph **graph = NULL;
     int graph_count = 0;
-    for (int i = 0; i < nb_output_streams; ++i) {
-        InputStream *ist = input_streams[i];
-        OutputStream *ost = output_streams[i];
+    int outputStreamSize = FFmpeg::getInstance()->getOutputStreams().size();
+    for (int i = 0; i < outputStreamSize; ++i) {
+        InputStream *ist = &FFmpeg::getInstance()->getInputStreams().at(i);
+        OutputStream *ost = &FFmpeg::getInstance()->getOutputStreams().at(i);
         ost->st->discard = ist->st->discard;
         ost->enc_ctx->bits_per_raw_sample = ist->dec_ctx->bits_per_raw_sample;
         ost->enc_ctx->chroma_sample_location = ist->dec_ctx->chroma_sample_location;
         if (!ost->filter && (ost->enc_ctx->codec_type == AVMEDIA_TYPE_VIDEO || ost->enc_ctx->codec_type == AVMEDIA_TYPE_AUDIO)) {
-            FilterGraph *filterGraph = init_filtergraph(ist, ost);
-            if ((ret = configure_filtergraph(filterGraph)) < 0) {
+            FilterGraph *filterGraph = Filters::getInstance()->init_filtergraph(ist, ost);
+            if ((ret = Filters::getInstance()->configure_filtergraph(filterGraph)) < 0) {
                 return ret;
             }
-            GROW_ARRAY(graph, graph_count);
             graph[graph_count - 1] = filterGraph;
         }
         AVRational frame_rate = { 0, 0 };
@@ -104,11 +120,12 @@ int init_output() {
                 break;
         }
     }
+    int inputStreamSize = FFmpeg::getInstance()->getInputStreams().size();
     AVDictionary *decoder_opts = NULL;
     av_dict_set(&decoder_opts, "threads", "auto", 0);
     //打开输入的编码器
-    for (int i = 0; i < nb_input_streams; ++i) {
-        InputStream *ist = input_streams[i];
+    for (int i = 0; i < inputStreamSize; ++i) {
+        InputStream *ist = &FFmpeg::getInstance()->getInputStreams().at(i);
         ist->dec_ctx->opaque = ist;
         ist->dec_ctx->get_buffer2 = get_buffer;
         if ((ret = avcodec_open2(ist->dec_ctx, ist->dec, &decoder_opts)) < 0) {
@@ -120,8 +137,8 @@ int init_output() {
     //打开输出的编码器
     AVDictionary *encoder_opts = NULL;
     av_dict_set(&encoder_opts, "threads", "auto", 0);
-    for (int i = 0; i < nb_output_streams; ++i) {
-        OutputStream *ost = output_streams[i];
+    for (int i = 0; i < outputStreamSize; ++i) {
+        OutputStream *ost = &FFmpeg::getInstance()->getOutputStreams().at(i);
         if ((ret = avcodec_open2(ost->enc_ctx, ost->enc, &encoder_opts)) < 0) {
             free_filter_graph(graph, graph_count);
             av_err2str(ret);
@@ -136,7 +153,7 @@ int init_output() {
         ost->st->codec->codec = ost->enc_ctx->codec;
     }
     //写文件头
-    if ((ret = avformat_write_header(output_file->oc, NULL)) < 0) {
+    if ((ret = avformat_write_header(FFmpeg::getInstance()->getOutputFile()->oc, NULL)) < 0) {
         free_filter_graph(graph, graph_count);
         av_err2str(ret);
         return ret;
@@ -144,13 +161,12 @@ int init_output() {
     return ret;
 }
 
-OutputStream *new_output_stream(AVFormatContext *oc, enum AVMediaType type, const char *codec_name, int source_index) {
+OutputStream * OpenFiles::new_output_stream(AVFormatContext *oc, enum AVMediaType type, const char *codec_name, int source_index) {
     AVStream *st = avformat_new_stream(oc, NULL);
     if (!st) {
         return NULL;
     }
-    OutputStream *ost = av_mallocz(sizeof(*ost));
-    GROW_ARRAY(output_streams, nb_output_streams);
+    OutputStream *ost = dynamic_cast<OutputStream *> (av_mallocz(sizeof(*ost)));
     AVCodec *enc = avcodec_find_encoder_by_name(codec_name);
     if (!enc) {
         av_log(NULL, AV_LOG_ERROR, "Can't found by encoder name %s", codec_name);
@@ -165,34 +181,34 @@ OutputStream *new_output_stream(AVFormatContext *oc, enum AVMediaType type, cons
 //    ost->enc->capabilities |= CODEC_CAP_DELAY;
 //    ost->enc_ctx->active_thread_type |= FF_THREAD_FRAME;
 //    ost->enc_ctx->thread_count = 8;
-    output_streams[nb_output_streams - 1] = ost;
     if (oc->oformat->flags & AVFMT_GLOBALHEADER) {
         ost->enc_ctx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
+    FFmpeg::getInstance()->addOutputStream(ost);
     return ost;
 }
 
-int open_output_file(const char *output_data_source, MediaSource *mediaSource, int new_width, int new_height) {
+int OpenFiles::openOutputFile(OutputFile *outputFile) {
     int ret = 0;
     AVFormatContext *oc = NULL;
-    ret = avformat_alloc_output_context2(&oc, NULL, NULL, output_data_source);
+    ret = avformat_alloc_output_context2(&oc, NULL, NULL, outputFile->outputDataSource);
     if (ret < 0) {
         av_err2str(ret);
         return ret;
     }
-    output_file = av_mallocz(sizeof(*output_file));
-    output_file->oc = oc;
-    for (int i = 0; i < nb_input_streams; ++i) {
-        InputStream *ist = input_streams[i];
+    outputFile->oc = oc;
+    int size = FFmpeg::getInstance()->getInputStreams().size();
+    for (int i = 0; i < size; ++i) {
+        InputStream *ist = &FFmpeg::getInstance()->getInputStreams().at(i);
         switch (ist->st->codec->codec_type) {
             case AVMEDIA_TYPE_VIDEO:
-                if (av_guess_codec(oc->oformat, NULL, output_data_source, NULL, AVMEDIA_TYPE_VIDEO) != AV_CODEC_ID_NONE) {
+                if (av_guess_codec(oc->oformat, NULL, outputFile->outputDataSource, NULL, AVMEDIA_TYPE_VIDEO) != AV_CODEC_ID_NONE) {
                     OutputStream *ost = new_output_stream(oc, AVMEDIA_TYPE_VIDEO, "libx264", i);
                     if (ost == NULL) {
                         return AVERROR(ENOMEM);
                     }
-                    ost->new_width = new_width;
-                    ost->new_height = new_height;
+                    ost->new_width = outputFile->newWidth;
+                    ost->new_height = outputFile->newHeight;
 //                    if (new_width > 0 && new_height > 0) {
 //                        char video_size[10];
 //                        snprintf(video_size, sizeof(video_size), "%dx%d", new_width, new_height);
@@ -205,16 +221,16 @@ int open_output_file(const char *output_data_source, MediaSource *mediaSource, i
 //                        }
 //                    }
                     ost->st->sample_aspect_ratio = ost->enc_ctx->sample_aspect_ratio;
-                    ost->avfilter = mediaSource->video_avfilter;
+                    ost->avfilter = outputFile->videoAVFilter;
                 }
                 break;
             case AVMEDIA_TYPE_AUDIO:
-                if (av_guess_codec(oc->oformat, NULL, output_data_source, NULL, AVMEDIA_TYPE_AUDIO) != AV_CODEC_ID_NONE) {
+                if (av_guess_codec(oc->oformat, NULL, outputFile->outputDataSource, NULL, AVMEDIA_TYPE_AUDIO) != AV_CODEC_ID_NONE) {
                     OutputStream *ost = new_output_stream(oc, AVMEDIA_TYPE_AUDIO, "aac", i);
                     if (ost == NULL) {
                         return AVERROR(ENOMEM);
                     }
-                    ost->avfilter = mediaSource->audio_avfilter;
+                    ost->avfilter = outputFile->audioAVFilter;
                 }
                 break;
             default:
@@ -222,7 +238,7 @@ int open_output_file(const char *output_data_source, MediaSource *mediaSource, i
         }
     }
     if (!(oc->oformat->flags & AVFMT_NOFILE)) {
-        ret = avio_open2(&oc->pb, output_data_source, AVIO_FLAG_WRITE, NULL, NULL);
+        ret = avio_open2(&oc->pb, outputFile->outputDataSource, AVIO_FLAG_WRITE, NULL, NULL);
         if (ret < 0) {
             av_err2str(ret);
             return ret;
@@ -234,55 +250,6 @@ int open_output_file(const char *output_data_source, MediaSource *mediaSource, i
     return ret;
 }
 
+void OpenFiles::release() {
 
-void release() {
-    nb_output_streams = 0;
-    nb_input_streams = 0;
-    if (input_file) {
-        for (int i = 0; i < input_file->ic->nb_streams; ++i) {
-            avcodec_close(input_file->ic->streams[i]->codec);
-            InputStream *ist = input_streams[i];
-            if (ist) {
-                if (ist->dec_ctx) {
-                    avcodec_close(ist->dec_ctx);
-                    avcodec_free_context(&ist->dec_ctx);
-                }
-                av_freep(&ist);
-            }
-            ist = NULL;
-        }
-        if (input_file->ic) {
-            avformat_close_input(&input_file->ic);
-            avformat_free_context(input_file->ic);
-        }
-        av_freep(&input_file);
-        input_file = NULL;
-    }
-    if (output_file) {
-        if (output_file->oc) {
-            if (output_file->oc && !(output_file->oc->oformat->flags & AVFMT_NOFILE)) {
-                avio_closep(&output_file->oc->pb);
-            }
-            for (int i = 0; i < output_file->oc->nb_streams; ++i) {
-                OutputStream *ost = output_streams[i];
-                if (ost) {
-                    if (ost->enc_ctx) {
-                        avcodec_close(ost->enc_ctx);
-                        avcodec_free_context(&ost->enc_ctx);
-                    }
-                    av_freep(&ost->avfilter);
-                    av_freep(&ost);
-                }
-                ost = NULL;
-            }
-            if (output_file->oc) {
-                avformat_free_context(output_file->oc);
-            }
-        }
-        av_freep(&output_file);
-        output_file = NULL;
-    }
-    av_freep(&input_streams);
-    av_freep(&output_streams);
 }
-

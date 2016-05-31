@@ -1,11 +1,25 @@
 //
-// Created by wlanjie on 16/5/3.
+// Created by wlanjie on 16/5/30.
 //
 
-#include "filter.h"
-#include "log.h"
+#include "Filters.h"
 
-AVFilterContext *get_transpose_filter(AVFilterContext *link_filter_context, AVFilterGraph *graph, const char *args) {
+Filters::Filters() {
+
+}
+
+Filters::~Filters() {
+
+}
+
+Filters* Filters::getInstance() {
+    if (instance == NULL) {
+        instance = new Filters();
+    }
+    return instance;
+}
+
+AVFilterContext* Filters::get_transpose_filter(AVFilterContext *link_filter_context, AVFilterGraph *graph, const char *args) {
     AVFilterContext *transpose_context;
     const AVFilter *transpose = avfilter_get_by_name("transpose");
     if (avfilter_graph_create_filter(&transpose_context, transpose, "transpose", args, NULL, graph) < 0) {
@@ -17,7 +31,7 @@ AVFilterContext *get_transpose_filter(AVFilterContext *link_filter_context, AVFi
     return transpose_context;
 }
 
-AVFilterContext *get_hflip_filter(AVFilterContext *link_filter_context, AVFilterGraph *graph) {
+AVFilterContext* Filters::get_hflip_filter(AVFilterContext *link_filter_context, AVFilterGraph *graph) {
     AVFilterContext *hflip_context;
     if (avfilter_graph_create_filter(&hflip_context, avfilter_get_by_name("hflip"), "hflip", NULL, NULL, graph) < 0) {
         return NULL;
@@ -28,7 +42,7 @@ AVFilterContext *get_hflip_filter(AVFilterContext *link_filter_context, AVFilter
     return hflip_context;
 }
 
-AVFilterContext *get_vflip_filter(AVFilterContext *link_filter_context, AVFilterGraph *graph) {
+AVFilterContext* Filters::get_vflip_filter(AVFilterContext *link_filter_context, AVFilterGraph *graph) {
     AVFilterContext *vflip_context;
     if (avfilter_graph_create_filter(&vflip_context, avfilter_get_by_name("vflip"), "vflip", NULL, NULL, graph) < 0) {
         return NULL;
@@ -40,7 +54,7 @@ AVFilterContext *get_vflip_filter(AVFilterContext *link_filter_context, AVFilter
     return vflip_context;
 }
 
-AVFilterContext *get_rotate_filter(AVFilterContext *link_filter_context, AVFilterGraph *graph, double theta) {
+AVFilterContext* Filters::get_rotate_filter(AVFilterContext *link_filter_context, AVFilterGraph *graph, double theta) {
     AVFilterContext *rotate_context;
     char rotate_buf[64];
     snprintf(rotate_buf, sizeof(rotate_buf), "%f*PI/180", theta);
@@ -53,7 +67,7 @@ AVFilterContext *get_rotate_filter(AVFilterContext *link_filter_context, AVFilte
     return rotate_context;
 }
 
-AVFilterContext *get_scale_filter(AVFilterContext *link_filter_context, AVFilterGraph *graph, int width, int height) {
+AVFilterContext* Filters::get_scale_filter(AVFilterContext *link_filter_context, AVFilterGraph *graph, int width, int height) {
     AVFilterContext *scale_context;
     AVFilter *scale_filter = avfilter_get_by_name("scale");
     AVBPrint args;
@@ -63,12 +77,12 @@ AVFilterContext *get_scale_filter(AVFilterContext *link_filter_context, AVFilter
         return NULL;
     }
     if (avfilter_link(link_filter_context, 0, scale_context, 0) < 0) {
-       return  NULL;
+        return  NULL;
     }
     return scale_context;
 }
 
-int configure_input_video_filter(FilterGraph *graph, AVFilterInOut *in) {
+int Filters::configure_input_video_filter(FilterGraph *graph, AVFilterInOut *in) {
     int ret = 0;
     AVFilter *buffer = avfilter_get_by_name("buffer");
     if (!buffer) {
@@ -83,7 +97,7 @@ int configure_input_video_filter(FilterGraph *graph, AVFilterInOut *in) {
     const struct AVRational sample_aspect_ratio = graph->ist->dec_ctx->sample_aspect_ratio;
     av_bprintf(&args, "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d", width, height, format,
                time_base.num, time_base.den, sample_aspect_ratio.num, sample_aspect_ratio.den);
-    AVRational fr = av_guess_frame_rate(input_file->ic, graph->ist->st, NULL);
+    AVRational fr = av_guess_frame_rate(FFmpeg::getInstance()->getInputFile()->ic, graph->ist->st, NULL);
     if (fr.num && fr.den) {
         av_bprintf(&args, ":frame_rate=%d/%d", fr.num, fr.den);
     }
@@ -94,7 +108,7 @@ int configure_input_video_filter(FilterGraph *graph, AVFilterInOut *in) {
         return ret;
     }
     AVFilterContext *last_filter = graph->ist->filter;
-    double theta = get_rotation(graph->ist->st);
+    double theta = FFmpeg::getInstance()->getRotation(graph->ist->st);
     if (fabs(theta - 90) < 1.0) {
         if (last_filter != NULL) {
             last_filter = get_transpose_filter(last_filter, graph->graph, "clock");
@@ -123,7 +137,7 @@ int configure_input_video_filter(FilterGraph *graph, AVFilterInOut *in) {
     return ret;
 }
 
-int configure_input_audio_filter(FilterGraph *graph, AVFilterInOut *in) {
+int Filters::configure_input_audio_filter(FilterGraph *graph, AVFilterInOut *in) {
     int ret = 0;
     const AVFilter *abuffer = avfilter_get_by_name("abuffer");
     if (!abuffer) {
@@ -153,7 +167,7 @@ int configure_input_audio_filter(FilterGraph *graph, AVFilterInOut *in) {
     return ret;
 }
 
-int configure_output_video_filter(FilterGraph *graph, AVFilterInOut *out) {
+int Filters::configure_output_video_filter(FilterGraph *graph, AVFilterInOut *out) {
     int ret = 0;
     AVFilter *buffersink = avfilter_get_by_name("buffersink");
     char name[255];
@@ -245,7 +259,7 @@ DEF_CHOOSE_FORMAT(int, sample_rate, supported_samplerates, 0, GET_SAMPLE_RATE_NA
 
 DEF_CHOOSE_FORMAT(uint64_t, channel_layout, channel_layouts, 0, GET_CHANNEL_LAYOUT_NAME);
 
-int configure_output_audio_filter(FilterGraph *graph, AVFilterInOut *out) {
+int Filters::configure_output_audio_filter(FilterGraph *graph, AVFilterInOut *out) {
     int ret = 0;
     AVFilter *abuffersink = avfilter_get_by_name("abuffersink");
     char name[255];
@@ -289,7 +303,7 @@ int configure_output_audio_filter(FilterGraph *graph, AVFilterInOut *out) {
     return ret;
 }
 
-int configure_filtergraph(FilterGraph *graph) {
+int Filters::configure_filtergraph(FilterGraph *graph) {
     int ret = 0;
     avfilter_graph_free(&graph->graph);
     if (!(graph->graph = avfilter_graph_alloc())) {
@@ -355,8 +369,8 @@ int configure_filtergraph(FilterGraph *graph) {
     return ret;
 }
 
-FilterGraph* init_filtergraph(InputStream *ist, OutputStream *ost) {
-    FilterGraph *graph = av_mallocz(sizeof(FilterGraph));
+FilterGraph* Filters::init_filtergraph(InputStream *ist, OutputStream *ost) {
+    FilterGraph *graph = dynamic_cast<FilterGraph *> (av_mallocz(sizeof(FilterGraph)));
     if (!graph)
         return NULL;
     graph->ist = ist;
